@@ -1,7 +1,12 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
+import customtkinter as ctk
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from scipy import stats
 import math
-from scipy.stats import chi2, norm
+from scipy.stats import norm
 
 # ---------------- MÉTODOS DE GENERACIÓN ----------------
 def cuadrados_medios(seed, n):
@@ -65,8 +70,8 @@ def prueba_varianza(resultados):
     var = sum((x - r_mean)**2 for x in r_vals) / (n - 1)
 
     chi2_stat = (n - 1) * var / (1/12)
-    chi2_lower = chi2.ppf(0.025, n - 1)
-    chi2_upper = chi2.ppf(0.975, n - 1)
+    chi2_lower = stats.chi2.ppf(0.025, n - 1)
+    chi2_upper = stats.chi2.ppf(0.975, n - 1)
 
     msg = f"📊 PRUEBA DE VARIANZA\n\n"
     msg += f"Varianza muestral: {var:.4f}\n"
@@ -79,33 +84,116 @@ def prueba_varianza(resultados):
         msg += "❌ Se rechaza la hipótesis de uniformidad en la varianza."
     return msg
 
-def prueba_chi_cuadrado(resultados, k=10):
-    r_vals = [r for _, _, _, _, r in resultados]
-    n = len(r_vals)
-    E = n / k
-    intervalos = [0] * k
+# ---------------- NUEVA PRUEBA DE UNIFORMIDAD ----------------
+class PruebaUniformidadApp(ctk.CTk):
+    def __init__(self, datos=None):
+        super().__init__()
+        self.title("Prueba de Uniformidad")
+        self.geometry("800x700")
+        self.resizable(True, True)
+        self.configure(bg_color="black")
+        self.datos = datos or []
 
-    # contar frecuencias observadas
-    for r in r_vals:
-        idx = min(int(r * k), k - 1)
-        intervalos[idx] += 1
+        frame = ctk.CTkFrame(self, fg_color="black")
+        frame.pack(pady=20, padx=20, fill="both", expand=True)
 
-    chi2_stat = sum((O - E)**2 / E for O in intervalos)
-    chi2_lower = chi2.ppf(0.025, k - 1)
-    chi2_upper = chi2.ppf(0.975, k - 1)
+        ctk.CTkLabel(frame, text="Prueba de Uniformidad (Chi²)", 
+                     font=("Helvetica", 18, "bold"), text_color="white").pack(pady=10)
 
-    msg = f"📊 PRUEBA DE UNIFORMIDAD (Chi²)\n\n"
-    msg += f"Intervalos: {k}\n"
-    msg += f"Frecuencia esperada E: {E:.2f}\n"
-    msg += f"Frecuencias observadas: {intervalos}\n\n"
-    msg += f"Estadístico Chi²: {chi2_stat:.4f}\n"
-    msg += f"Límites: [{chi2_lower:.4f}, {chi2_upper:.4f}]\n\n"
+        self.m_entry = ctk.CTkEntry(frame, width=200, placeholder_text="Número de intervalos (m)")
+        self.m_entry.insert(0, "10")
+        self.m_entry.pack(pady=5)
+        
+        self.alpha_entry = ctk.CTkEntry(frame, width=200, placeholder_text="Nivel de confianza (α)")
+        self.alpha_entry.insert(0, "0.95")
+        self.alpha_entry.pack(pady=5)
 
-    if chi2_lower <= chi2_stat <= chi2_upper:
-        msg += "✅ Se acepta la hipótesis de uniformidad."
-    else:
-        msg += "❌ Se rechaza la hipótesis de uniformidad."
-    return msg
+        self.resultado_text = scrolledtext.ScrolledText(frame, width=80, height=10, bg="black", fg="white",
+                                                        font=("Courier", 10), wrap=tk.WORD)
+        self.resultado_text.pack(pady=10, fill="both", expand=True)
+
+        btn_frame = ctk.CTkFrame(frame, fg_color="black")
+        btn_frame.pack(pady=10)
+
+        ctk.CTkButton(btn_frame,text="Ejecutar Prueba",command=self.ejecutar_prueba).pack(side="left",padx=5)
+        ctk.CTkButton(btn_frame,text="Mostrar Histograma",command=self.mostrar_histograma).pack(side="left",padx=5)
+        ctk.CTkButton(btn_frame,text="Exportar a .txt",command=self.exportar_resultados).pack(side="left",padx=5)
+        ctk.CTkButton(frame, text="Volver al generador", command=self.destroy).place(x=600,y=10)
+
+        self.canvas=None
+
+    def ejecutar_prueba(self):
+        try:
+            m=int(self.m_entry.get())
+            alpha=float(self.alpha_entry.get())
+            if len(self.datos)==0:
+                messagebox.showwarning("Advertencia","No hay datos generados.")
+                return
+            intervalos=np.linspace(0,1,m+1)
+            frecuencia_esperada=len(self.datos)/m
+            frecuencia_observada=np.zeros(m)
+            for x in self.datos:
+                i=np.searchsorted(intervalos,x,side='right')-1
+                if 0<=i<m:
+                    frecuencia_observada[i]+=1
+            chi_calculado=sum((frecuencia_observada-frecuencia_esperada)**2/frecuencia_esperada)
+            df=m-1
+            chi_critico=stats.chi2.ppf(alpha,df)
+            resultado=f"""
+Resultados de la Prueba de Uniformidad (Chi²):
+
+Número de observaciones (n): {len(self.datos)}
+Número de intervalos (m): {m}
+Grados de libertad: {df}
+Nivel de confianza: {alpha}
+
+Frecuencia Esperada por intervalo: {frecuencia_esperada:.2f}
+
+Chi² calculado: {chi_calculado:.4f}
+Chi² crítico ({alpha}, {df}): {chi_critico:.4f}
+
+Conclusión: 
+{"✅ Se acepta H0 (uniformidad)" if chi_calculado < chi_critico else "❌ Se rechaza H0 (no uniformidad)"}
+"""
+            self.resultado_text.delete(1.0, tk.END)
+            self.resultado_text.insert(tk.END,resultado)
+        except Exception as e:
+            messagebox.showerror("Error",f"{e}")
+
+    def mostrar_histograma(self):
+        try:
+            m=int(self.m_entry.get())
+            if len(self.datos)==0:
+                messagebox.showwarning("Advertencia","No hay datos generados.")
+                return
+            fig,ax=plt.subplots(figsize=(8,5),dpi=100)
+            n,bins,patches=ax.hist(self.datos,bins=m,edgecolor='green',color='green',alpha=0.8,rwidth=0.8)
+            esperada=len(self.datos)/m
+            ax.axhline(y=esperada,color='red',linestyle='--',linewidth=1.5,label=f'Frecuencia Esperada ({esperada:.2f})')
+            kde=stats.gaussian_kde(self.datos)
+            x_kde=np.linspace(0,1,100)
+            y_kde=kde(x_kde)
+            ax.plot(x_kde,y_kde*len(self.datos),color='yellow',linewidth=1.5,label='KDE')
+            ax.set_xlabel("Intervalos (0,1)")
+            ax.set_ylabel("Frecuencia Observada")
+            ax.set_title("Histograma de Frecuencias con KDE")
+            ax.legend()
+            if self.canvas:
+                self.canvas.get_tk_widget().destroy()
+            self.canvas=FigureCanvasTkAgg(fig,master=self)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(pady=10,fill="both",expand=True)
+        except Exception as e:
+            messagebox.showerror("Error",f"{e}")
+
+    def exportar_resultados(self):
+        try:
+            contenido=self.resultado_text.get(1.0,tk.END)
+            with open("prueba_uniformidad.txt","w",encoding="utf-8") as f:
+                f.write(contenido)
+            messagebox.showinfo("Éxito","Resultados exportados a 'prueba_uniformidad.txt'")
+        except Exception as e:
+            messagebox.showerror("Error",f"No se pudo exportar: {e}")
 
 # ---------------- CONTROL DE INTERFAZ ----------------
 def generar():
@@ -142,47 +230,68 @@ def generar():
     except ValueError:
         messagebox.showerror("Error", "Por favor ingrese valores numéricos válidos.")
 
-def ejecutar_pruebas():
+def ejecutar_prueba_media():
     if not resultados:
         messagebox.showerror("Error", "Primero genere números.")
         return
-    msg = prueba_media(resultados) + "\n\n" + prueba_varianza(resultados) + "\n\n" + prueba_chi_cuadrado(resultados, k=10)
-    messagebox.showinfo("Resultados de las Pruebas", msg)
+    messagebox.showinfo("Resultado Prueba Media", prueba_media(resultados))
 
-# ---------------- INTERFAZ ----------------
-root = tk.Tk()
+def ejecutar_prueba_varianza():
+    if not resultados:
+        messagebox.showerror("Error", "Primero genere números.")
+        return
+    messagebox.showinfo("Resultado Prueba Varianza", prueba_varianza(resultados))
+
+def ejecutar_prueba_uniformidad():
+    if not resultados:
+        messagebox.showerror("Error", "Primero genere números.")
+        return
+    r_vals = [r for _, _, _, _, r in resultados]
+    PruebaUniformidadApp(datos=r_vals).mainloop()
+
+# ---------------- INTERFAZ PRINCIPAL ----------------
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+root = ctk.CTk()
 root.title("Generador de Números Aleatorios")
-root.geometry("1050x600")
+root.geometry("1100x650")
 
-frame_inputs = tk.LabelFrame(root, text="Configuración", padx=10, pady=10)
+frame_inputs = ctk.CTkFrame(root)
 frame_inputs.pack(fill="x", pady=10)
 
-tk.Label(frame_inputs, text="Método:").grid(row=0, column=0, padx=5, pady=5)
+ctk.CTkLabel(frame_inputs, text="Método:").grid(row=0, column=0, padx=5, pady=5)
 combo_metodo = ttk.Combobox(frame_inputs, values=["Cuadrados Medios", "Productos Medios", "Multiplicador Constante"], state="readonly")
 combo_metodo.current(0)
 combo_metodo.grid(row=0, column=1, padx=5, pady=5)
 
-tk.Label(frame_inputs, text="Semilla 1:").grid(row=0, column=2, padx=5, pady=5)
-entry_seed1 = tk.Entry(frame_inputs, width=8)
+ctk.CTkLabel(frame_inputs, text="Semilla 1:").grid(row=0, column=2, padx=5, pady=5)
+entry_seed1 = ctk.CTkEntry(frame_inputs, width=80)
 entry_seed1.grid(row=0, column=3, padx=5, pady=5)
 
-tk.Label(frame_inputs, text="Semilla 2 (productos):").grid(row=0, column=4, padx=5, pady=5)
-entry_seed2 = tk.Entry(frame_inputs, width=8)
+ctk.CTkLabel(frame_inputs, text="Semilla 2 (productos):").grid(row=0, column=4, padx=5, pady=5)
+entry_seed2 = ctk.CTkEntry(frame_inputs, width=80)
 entry_seed2.grid(row=0, column=5, padx=5, pady=5)
 
-tk.Label(frame_inputs, text="Constante (multiplicador):").grid(row=0, column=6, padx=5, pady=5)
-entry_const = tk.Entry(frame_inputs, width=8)
+ctk.CTkLabel(frame_inputs, text="Constante (multiplicador):").grid(row=0, column=6, padx=5, pady=5)
+entry_const = ctk.CTkEntry(frame_inputs, width=80)
 entry_const.grid(row=0, column=7, padx=5, pady=5)
 
-tk.Label(frame_inputs, text="Cantidad n:").grid(row=0, column=8, padx=5, pady=5)
-entry_n = tk.Entry(frame_inputs, width=8)
-entry_n.grid(row=0, column=9, padx=5, pady=5)
+ctk.CTkLabel(frame_inputs, text="Cantidad n:").grid(row=0, column=8, padx=5, pady=5)
+entry_n = ctk.CTkEntry(frame_inputs, width=80)
+entry_n.grid(row=0, column=9, padx=5, pady=4)
 
-btn_generar = tk.Button(frame_inputs, text="Generar", command=generar, bg="#4CAF50", fg="white")
-btn_generar.grid(row=0, column=10, padx=10, pady=5)
+btn_generar = ctk.CTkButton(frame_inputs, text="Generar", command=generar, width=140, height=35, corner_radius=12)
+btn_generar.grid(row=2, column=0, padx=10, pady=15)
 
-btn_pruebas = tk.Button(frame_inputs, text="Ejecutar Pruebas", command=ejecutar_pruebas, bg="#2196F3", fg="white")
-btn_pruebas.grid(row=0, column=11, padx=10, pady=5)
+btn_prueba_media = ctk.CTkButton(frame_inputs, text="Prueba Media", command=ejecutar_prueba_media, width=140, height=35, corner_radius=12)
+btn_prueba_media.grid(row=2, column=1, padx=10, pady=15)
+
+btn_prueba_varianza = ctk.CTkButton(frame_inputs, text="Prueba Varianza", command=ejecutar_prueba_varianza, width=140, height=35, corner_radius=12)
+btn_prueba_varianza.grid(row=2, column=2, padx=10, pady=15)
+
+btn_prueba_uniformidad = ctk.CTkButton(frame_inputs, text="Prueba Uniformidad", command=ejecutar_prueba_uniformidad, width=160, height=35, corner_radius=12)
+btn_prueba_uniformidad.grid(row=2, column=3, padx=10, pady=15)
 
 columns = ("i", "Entrada", "Operación", "Xi", "ri")
 tree = ttk.Treeview(root, columns=columns, show="headings", height=18)
